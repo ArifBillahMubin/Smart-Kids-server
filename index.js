@@ -3,6 +3,8 @@ const express = require('express')
 const cors = require('cors')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
 const admin = require('firebase-admin')
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
 const port = process.env.PORT || 3000
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString(
   'utf-8'
@@ -16,11 +18,7 @@ const app = express()
 // middleware
 app.use(
   cors({
-    origin: [
-      'http://localhost:5173',
-      'http://localhost:5174',
-      'https://b12-m11-session.web.app',
-    ],
+    origin: [process.env.DOMAIN_URL],
     credentials: true,
     optionSuccessStatus: 200,
   })
@@ -57,6 +55,8 @@ async function run() {
     const db = client.db('smart_kids')
     const coursesCollection = db.collection('courses')
     const usersCollection = db.collection('users')
+    const enrollmentsCollection = db.collection('enrollments');
+
 
     // save and add course 
     app.post('/courses', async (req, res) => {
@@ -181,6 +181,115 @@ async function run() {
         res.status(500).send({ message: 'Error fetching user' });
       }
     });
+
+
+
+
+    // ═══════════════════════════════════════════════════
+    // ENROLLMENT & PAYMENT ROUTES
+    // ═══════════════════════════════════════════════════
+
+    // Free enrollment
+    app.post('/enrollments', async (req, res) => {
+      try {
+        const { courseId, courseTitle, userEmail, userName } = req.body;
+        const existing = await enrollmentsCollection.findOne({ courseId, userEmail });
+        if (existing) return res.send({ success: true, message: 'Already enrolled' });
+        const result = await enrollmentsCollection.insertOne({
+          courseId, courseTitle, userEmail, userName,
+          payment: false, enrolledAt: new Date()
+        });
+        await coursesCollection.updateOne(
+          { _id: new ObjectId(courseId) }, { $inc: { enrolled: 1 } }
+        );
+        res.status(201).send({ success: true, insertedId: result.insertedId });
+      } catch (err) {
+        res.status(500).send({ message: 'Error saving enrollment' });
+      }
+    });
+
+    // Get enrollments by email
+    app.get('/enrollments/:email', async (req, res) => {
+      try {
+        const data = await enrollmentsCollection
+          .find({ userEmail: req.params.email }).toArray();
+        res.send(data);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching enrollments' });
+      }
+    });
+
+    // Create Stripe checkout session
+    app.post('/create-checkout-session', async (req, res) => {
+      try {
+        const { courseId, courseTitle, description, priceAmount, userEmail, userName } = req.body;
+        const session = await stripe.checkout.sessions.create({
+          line_items: [{
+            price_data: {
+              currency: 'usd',
+              product_data: { name: courseTitle, description: description || '' },
+              unit_amount: Math.round(priceAmount * 100)
+            },
+            quantity: 1
+          }],
+          customer_email: userEmail,
+          mode: 'payment',
+          metadata: { courseId, courseTitle, userEmail, userName: userName || '' },
+          success_url: `${process.env.DOMAIN_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.DOMAIN_URL}/courses/${courseId}`
+        });
+        res.send({ url: session.url });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: 'Error creating checkout session' });
+      }
+    });
+
+    // Payment success — verify & save
+    app.post('/payment-success', async (req, res) => {
+      console.log('BODY:', req.body);
+      try {
+        const { sessionId } = req.body;
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        //
+        console.log('=== METADATA ===', session.metadata);
+
+        if (session.payment_status !== 'paid') {
+          return res.send({ success: false, message: 'Payment not completed' });
+        }
+        const { courseId, courseTitle, userEmail, userName } = session.metadata;
+        const existing = await enrollmentsCollection.findOne({ courseId, userEmail });
+        if (existing) {
+          return res.send({
+            success: true, message: 'Already enrolled',
+            enrollmentId: existing._id, transactionId: session.payment_intent
+          });
+        }
+        const result = await enrollmentsCollection.insertOne({
+          courseId, courseTitle, userEmail, userName,
+          payment: true,
+          transactionId: session.payment_intent,
+          paymentDate: new Date(),
+          enrolledAt: new Date()
+        });
+        await coursesCollection.updateOne(
+          { _id: new ObjectId(courseId) }, { $inc: { enrolled: 1 } }
+        );
+        res.send({
+          success: true,
+          message: 'Payment successful & enrolled',
+          enrollmentId: result.insertedId,
+          transactionId: session.payment_intent
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: 'Error processing payment' });
+      }
+    });
+
+
+
 
 
     // Send a ping to confirm a successful connection
