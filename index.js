@@ -56,6 +56,7 @@ async function run() {
   try {
     const db = client.db('smart_kids')
     const coursesCollection = db.collection('courses')
+    const usersCollection = db.collection('users')
 
     // save and add course 
     app.post('/courses', async (req, res) => {
@@ -151,6 +152,33 @@ async function run() {
       } catch (error) {
         console.error(error);
         res.status(500).send({ message: 'Error updating course' });
+      }
+    });
+
+    // Save or update user
+    app.post('/users', async (req, res) => {
+      try {
+        const user = req.body;
+        // Check if user already exists
+        const existing = await usersCollection.findOne({ email: user.email });
+        if (existing) {
+          return res.send({ message: 'User already exists', insertedId: null });
+        }
+        const result = await usersCollection.insertOne(user);
+        res.status(201).send(result);
+      } catch (error) {
+        res.status(500).send({ message: 'Error saving user' });
+      }
+    });
+
+    // Get user by email (to check role)
+    app.get('/users/:email', async (req, res) => {
+      try {
+        const { email } = req.params;
+        const user = await usersCollection.findOne({ email });
+        res.send(user);
+      } catch (error) {
+        res.status(500).send({ message: 'Error fetching user' });
       }
     });
 
