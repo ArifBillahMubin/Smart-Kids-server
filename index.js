@@ -58,6 +58,8 @@ async function run() {
     const enrollmentsCollection = db.collection('enrollments');
     const lessonsCollection = db.collection('lessons');
     const quizzesCollection = db.collection('quizzes');
+    const lessonProgressCollection = db.collection('lesson_progress');
+    const quizResultsCollection = db.collection('quiz_results');
 
 
 
@@ -100,9 +102,38 @@ async function run() {
     app.delete('/course/:id', async (req, res) => {
       try {
         const id = req.params.id;
-        const filter = { _id: new ObjectId(id) };
-        const result = await coursesCollection.deleteOne(filter);
-        res.send(result);
+
+        // 1. Get all lessons for this course
+        const lessons = await lessonsCollection
+          .find({ courseId: id })
+          .toArray();
+
+        const lessonIds = lessons.map(l => l._id.toString());
+
+        // 2. Delete all quizzes for each lesson
+        if (lessonIds.length > 0) {
+          await quizzesCollection.deleteMany({ lessonId: { $in: lessonIds } });
+        }
+
+        // 3. Delete all lessons
+        await lessonsCollection.deleteMany({ courseId: id });
+
+        // 4. Delete all enrollments
+        await enrollmentsCollection.deleteMany({ courseId: id });
+
+        // 5. Delete lesson progress        
+        await lessonProgressCollection.deleteMany({ courseId: id });
+
+        // 6. Delete quiz results           
+        await quizResultsCollection.deleteMany({ courseId: id });
+
+        // 7. Finally delete the course
+        const result = await coursesCollection.deleteOne({ _id: new ObjectId(id) });
+
+        res.send({
+          success: true,
+          deletedCourse: result.deletedCount,
+        });
       } catch (error) {
         console.error(error);
         res.status(500).send({ message: 'Error deleting course' });
@@ -158,6 +189,9 @@ async function run() {
       }
     });
 
+
+    // user 
+
     // Save or update user
     app.post('/users', async (req, res) => {
       try {
@@ -184,6 +218,22 @@ async function run() {
         res.status(500).send({ message: 'Error fetching user' });
       }
     });
+
+    // Update user profile
+    app.put('/users/:email', async (req, res) => {
+      try {
+        const { email } = req.params;
+        const updateData = req.body;
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: updateData }
+        );
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: 'Error updating user' });
+      }
+    });
+
 
 
 
@@ -415,6 +465,93 @@ async function run() {
         res.send(result);
       } catch (err) {
         res.status(500).send({ message: 'Error deleting quiz' });
+      }
+    });
+
+
+
+
+    // ════════════════════════════════════════
+    // LESSON PROGRESS
+    // ════════════════════════════════════════
+
+    // Mark lesson as watched
+    app.post('/lesson-progress/watch', async (req, res) => {
+      try {
+        const { userEmail, courseId, lessonId } = req.body;
+        await lessonProgressCollection.updateOne(
+          { userEmail, courseId, lessonId },
+          { $set: { userEmail, courseId, lessonId, watched: true, watchedAt: new Date() } },
+          { upsert: true }
+        );
+        res.send({ success: true });
+      } catch (err) {
+        res.status(500).send({ message: 'Error saving progress' });
+      }
+    });
+
+    // Mark lesson as completed (video + quiz done)
+    app.post('/lesson-progress/complete', async (req, res) => {
+      try {
+        const { userEmail, courseId, lessonId } = req.body;
+        await lessonProgressCollection.updateOne(
+          { userEmail, courseId, lessonId },
+          { $set: { completed: true, completedAt: new Date() } },
+          { upsert: true }
+        );
+        res.send({ success: true });
+      } catch (err) {
+        res.status(500).send({ message: 'Error completing lesson' });
+      }
+    });
+
+    // Get all progress for a user in a course
+    app.get('/lesson-progress/:userEmail/:courseId', async (req, res) => {
+      try {
+        const { userEmail, courseId } = req.params;
+        const progress = await lessonProgressCollection
+          .find({ userEmail, courseId })
+          .toArray();
+        res.send(progress);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching progress' });
+      }
+    });
+
+    // ════════════════════════════════════════
+    // QUIZ RESULTS
+    // ════════════════════════════════════════
+
+    // Save quiz result
+    app.post('/quiz-results', async (req, res) => {
+      try {
+        const { userEmail, courseId, lessonId, quizId, score, total, passed } = req.body;
+        // Keep best score
+        const existing = await quizResultsCollection.findOne({ userEmail, lessonId });
+        if (existing && existing.score >= score) {
+          return res.send({ success: true, message: 'Previous score was better' });
+        }
+        await quizResultsCollection.updateOne(
+          { userEmail, lessonId },
+          { $set: { userEmail, courseId, lessonId, quizId, score, total, passed, attemptedAt: new Date() } },
+          { upsert: true }
+        );
+        res.send({ success: true });
+      } catch (err) {
+        res.status(500).send({ message: 'Error saving quiz result' });
+      }
+    });
+
+    // Get quiz results for a user in a course
+    app.get('/quiz-results/:userEmail/:courseId', async (req, res) => {
+      try {
+        const { userEmail, courseId } = req.params;
+        const results = await quizResultsCollection
+          .find({ userEmail, courseId })
+          .toArray();
+        res.send(results);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching quiz results' });
       }
     });
 
