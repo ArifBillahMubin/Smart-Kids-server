@@ -56,6 +56,9 @@ async function run() {
     const coursesCollection = db.collection('courses')
     const usersCollection = db.collection('users')
     const enrollmentsCollection = db.collection('enrollments');
+    const lessonsCollection = db.collection('lessons');
+    const quizzesCollection = db.collection('quizzes');
+
 
 
     // save and add course 
@@ -289,6 +292,131 @@ async function run() {
     });
 
 
+
+    // ════════════════════════════════════════
+    // LESSON ROUTES
+    // ════════════════════════════════════════
+
+    // Add lesson
+    app.post('/lessons', async (req, res) => {
+      try {
+        const lesson = req.body;
+        const result = await lessonsCollection.insertOne({
+          ...lesson,
+          createdAt: new Date()
+        });
+        res.status(201).send(result);
+      } catch (err) {
+        res.status(500).send({ message: 'Error adding lesson' });
+      }
+    });
+
+    // Get all lessons for a course
+    app.get('/lessons/:courseId', async (req, res) => {
+      try {
+        const lessons = await lessonsCollection
+          .find({ courseId: req.params.courseId })
+          .sort({ weekIndex: 1, order: 1 })
+          .toArray();
+        res.send(lessons);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching lessons' });
+      }
+    });
+
+    // Update lesson
+    app.put('/lessons/:id', async (req, res) => {
+      try {
+        const result = await lessonsCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: req.body }
+        );
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: 'Error updating lesson' });
+      }
+    });
+
+    // Delete lesson
+    app.delete('/lessons/:id', async (req, res) => {
+      try {
+        const result = await lessonsCollection.deleteOne(
+          { _id: new ObjectId(req.params.id) }
+        );
+        // Also delete related quizzes
+        await quizzesCollection.deleteMany({ lessonId: req.params.id });
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: 'Error deleting lesson' });
+      }
+    });
+
+    // ════════════════════════════════════════
+    // QUIZ ROUTES
+    // ════════════════════════════════════════
+
+    // Add quiz to a lesson
+    app.post('/quizzes', async (req, res) => {
+      try {
+        const quiz = req.body;
+        const result = await quizzesCollection.insertOne({
+          ...quiz,
+          createdAt: new Date()
+        });
+        res.status(201).send(result);
+      } catch (err) {
+        res.status(500).send({ message: 'Error adding quiz' });
+      }
+    });
+
+    // Get quiz by lessonId
+    app.get('/quizzes/:lessonId', async (req, res) => {
+      try {
+        const quiz = await quizzesCollection.findOne(
+          { lessonId: req.params.lessonId }
+        );
+        res.send(quiz || null);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching quiz' });
+      }
+    });
+
+    // Get all quizzes for a course
+    app.get('/quizzes/course/:courseId', async (req, res) => {
+      try {
+        const quizzes = await quizzesCollection
+          .find({ courseId: req.params.courseId })
+          .toArray();
+        res.send(quizzes);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching quizzes' });
+      }
+    });
+
+    // Update quiz
+    app.put('/quizzes/:id', async (req, res) => {
+      try {
+        const result = await quizzesCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: req.body }
+        );
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: 'Error updating quiz' });
+      }
+    });
+
+    // Delete quiz
+    app.delete('/quizzes/:id', async (req, res) => {
+      try {
+        const result = await quizzesCollection.deleteOne(
+          { _id: new ObjectId(req.params.id) }
+        );
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: 'Error deleting quiz' });
+      }
+    });
 
 
 
