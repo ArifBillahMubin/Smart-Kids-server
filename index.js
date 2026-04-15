@@ -60,6 +60,7 @@ async function run() {
     const quizzesCollection = db.collection('quizzes');
     const lessonProgressCollection = db.collection('lesson_progress');
     const quizResultsCollection = db.collection('quiz_results');
+    const reviewsCollection = db.collection('reviews');
 
 
 
@@ -554,6 +555,149 @@ async function run() {
         res.status(500).send({ message: 'Error fetching quiz results' });
       }
     });
+
+
+    // Reset lesson progress for a course
+    app.delete('/lesson-progress/:userEmail/:courseId', async (req, res) => {
+      try {
+        const { userEmail, courseId } = req.params;
+        await lessonProgressCollection.deleteMany({ userEmail, courseId });
+        await quizResultsCollection.deleteMany({ userEmail, courseId });
+        res.send({ success: true });
+      } catch (err) {
+        res.status(500).send({ message: 'Error resetting progress' });
+      }
+    });
+
+    // Save review
+    app.post('/reviews', async (req, res) => {
+      try {
+        const review = req.body;
+        // One review per user per course
+        await reviewsCollection.updateOne(
+          { userEmail: review.userEmail, courseId: review.courseId },
+          { $set: { ...review, updatedAt: new Date() } },
+          { upsert: true }
+        );
+        res.status(201).send({ success: true });
+      } catch (err) {
+        res.status(500).send({ message: 'Error saving review' });
+      }
+    });
+
+    // Get reviews for a course
+    app.get('/reviews/:courseId', async (req, res) => {
+      try {
+        const reviews = await reviewsCollection
+          .find({ courseId: req.params.courseId })
+          .sort({ updatedAt: -1 })
+          .toArray();
+        res.send(reviews);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching reviews' });
+      }
+    });
+
+
+
+
+    //admin dashboard 
+    // ── Admin Stats ──
+    app.get('/admin/stats', async (req, res) => {
+      try {
+        const [users, courses, enrollments, reviews] = await Promise.all([
+          usersCollection.countDocuments(),
+          coursesCollection.countDocuments(),
+          enrollmentsCollection.countDocuments(),
+          reviewsCollection.countDocuments(),
+        ]);
+        const revenue = await enrollmentsCollection.aggregate([
+          { $match: { payment: true } },
+          { $lookup: { from: 'courses', localField: 'courseId', foreignField: '_id', as: 'course' } },
+        ]).toArray();
+        res.send({ users, courses, enrollments, reviews });
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching stats' });
+      }
+    });
+
+    // ── Get all users ──
+    app.get('/admin/users', async (req, res) => {
+      try {
+        const users = await usersCollection.find({}).sort({ _id: -1 }).toArray();
+        res.send(users);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching users' });
+      }
+    });
+
+    // ── Update user role ──
+    app.patch('/admin/users/:email/role', async (req, res) => {
+      try {
+        const { role } = req.body;
+        const result = await usersCollection.updateOne(
+          { email: req.params.email },
+          { $set: { role } }
+        );
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: 'Error updating role' });
+      }
+    });
+
+    // ── Delete user ──
+    app.delete('/admin/users/:email', async (req, res) => {
+      try {
+        const { email } = req.params;
+        await usersCollection.deleteOne({ email });
+        await enrollmentsCollection.deleteMany({ userEmail: email });
+        await lessonProgressCollection.deleteMany({ userEmail: email });
+        await quizResultsCollection.deleteMany({ userEmail: email });
+        res.send({ success: true });
+      } catch (err) {
+        res.status(500).send({ message: 'Error deleting user' });
+      }
+    });
+
+    // ── Get all reviews ──
+    app.get('/admin/reviews', async (req, res) => {
+      try {
+        const reviews = await reviewsCollection.find({}).sort({ updatedAt: -1 }).toArray();
+        res.send(reviews);
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching reviews' });
+      }
+    });
+
+    // ── Delete review ──
+    app.delete('/admin/reviews/:id', async (req, res) => {
+      try {
+        const result = await reviewsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: 'Error deleting review' });
+      }
+    });
+
+    // ── Admin analytics ──
+    app.get('/admin/analytics', async (req, res) => {
+      try {
+        const topCourses = await enrollmentsCollection.aggregate([
+          { $group: { _id: '$courseId', count: { $sum: 1 }, title: { $first: '$courseTitle' } } },
+          { $sort: { count: -1 } },
+          { $limit: 5 }
+        ]).toArray();
+
+        const quizStats = await quizResultsCollection.aggregate([
+          { $group: { _id: '$courseId', total: { $sum: 1 }, passed: { $sum: { $cond: ['$passed', 1, 0] } }, avgScore: { $avg: { $multiply: [{ $divide: ['$score', '$total'] }, 100] } } } },
+        ]).toArray();
+
+        res.send({ topCourses, quizStats });
+      } catch (err) {
+        res.status(500).send({ message: 'Error fetching analytics' });
+      }
+    });
+
 
 
 
