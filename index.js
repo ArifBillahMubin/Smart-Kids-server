@@ -4,6 +4,7 @@ const cors = require('cors')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
 const admin = require('firebase-admin')
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+const Groq = require('groq-sdk')
 
 const port = process.env.PORT || 3000
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf-8')
@@ -41,7 +42,7 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 
 async function run() {
   try {
-    // await client.connect()
+    await client.connect()
     const db = client.db('smart_kids')
     const coursesCollection = db.collection('courses')
     const usersCollection = db.collection('users')
@@ -600,5 +601,47 @@ async function run() {
 run().catch(console.dir)
 
 app.get('/', (req, res) => res.send('Hello from Server..'))
+
+// ── AI Chat ──
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+
+app.post('/chat', async (req, res) => {
+  try {
+    const { message, history = [] } = req.body
+
+    const messages = [
+      {
+        role: 'system',
+        content: `তুমি SmartKids platform এর AI assistant "Kido"।
+SmartKids একটি বাংলাদেশি kids learning platform যেখানে:
+- Guardian (অভিভাবক) তাদের সন্তানদের জন্য courses enroll করেন
+- Kids (শিশুরা) lessons দেখে এবং quiz দেয়
+- Admin platform manage করেন
+- Courses এ Mathematics, Science, English, Bangla, Coding, Arts আছে
+- Class 1-5 এর জন্য courses আছে
+- Free এবং Paid courses আছে, Stripe দিয়ে payment হয়
+- প্রতিটি lesson এ video এবং quiz আছে
+- Quiz complete করলে পরের lesson unlock হয়
+- Guardian dashboard এ child progress, reports দেখা যায়
+তুমি বাংলা এবং English দুই ভাষায় কথা বলতে পারবে।
+User যে ভাষায় কথা বলবে সেই ভাষায় reply করবে।
+Friendly এবং helpful থাকবে।`,
+      },
+      ...history.slice(-10).map(h => ({ role: h.role === 'model' ? 'assistant' : 'user', content: h.text })),
+      { role: 'user', content: message },
+    ]
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages,
+      max_tokens: 500,
+    })
+
+    res.send({ reply: completion.choices[0].message.content })
+  } catch (err) {
+    console.error('Chat error:', err?.message || err)
+    res.status(500).send({ message: 'Chat error', error: err?.message })
+  }
+})
 
 app.listen(port, () => console.log(`Server is running on port ${port}`))
